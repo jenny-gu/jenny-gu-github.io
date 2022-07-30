@@ -18,17 +18,131 @@ lib.ssMetadata = [
 (lib.AnMovieClip = function(){
 	this.actionFrames = [];
 	this.ignorePause = false;
+	this.currentSoundStreamInMovieclip;
+	this.soundStreamDuration = new Map();
+	this.streamSoundSymbolsList = [];
+
+	this.gotoAndPlayForStreamSoundSync = function(positionOrLabel){
+		cjs.MovieClip.prototype.gotoAndPlay.call(this,positionOrLabel);
+	}
 	this.gotoAndPlay = function(positionOrLabel){
+		this.clearAllSoundStreams();
+		var pos = this.timeline.resolve(positionOrLabel);
+		if (pos != null) { this.startStreamSoundsForTargetedFrame(pos); }
 		cjs.MovieClip.prototype.gotoAndPlay.call(this,positionOrLabel);
 	}
 	this.play = function(){
+		this.clearAllSoundStreams();
+		this.startStreamSoundsForTargetedFrame(this.currentFrame);
 		cjs.MovieClip.prototype.play.call(this);
 	}
 	this.gotoAndStop = function(positionOrLabel){
 		cjs.MovieClip.prototype.gotoAndStop.call(this,positionOrLabel);
+		this.clearAllSoundStreams();
 	}
 	this.stop = function(){
 		cjs.MovieClip.prototype.stop.call(this);
+		this.clearAllSoundStreams();
+	}
+	this.startStreamSoundsForTargetedFrame = function(targetFrame){
+		for(var index=0; index<this.streamSoundSymbolsList.length; index++){
+			if(index <= targetFrame && this.streamSoundSymbolsList[index] != undefined){
+				for(var i=0; i<this.streamSoundSymbolsList[index].length; i++){
+					var sound = this.streamSoundSymbolsList[index][i];
+					if(sound.endFrame > targetFrame){
+						var targetPosition = Math.abs((((targetFrame - sound.startFrame)/lib.properties.fps) * 1000));
+						var instance = playSound(sound.id);
+						var remainingLoop = 0;
+						if(sound.offset){
+							targetPosition = targetPosition + sound.offset;
+						}
+						else if(sound.loop > 1){
+							var loop = targetPosition /instance.duration;
+							remainingLoop = Math.floor(sound.loop - loop);
+							if(targetPosition == 0){ remainingLoop -= 1; }
+							targetPosition = targetPosition % instance.duration;
+						}
+						instance.loop = remainingLoop;
+						instance.position = Math.round(targetPosition);
+						this.InsertIntoSoundStreamData(instance, sound.startFrame, sound.endFrame, sound.loop , sound.offset);
+					}
+				}
+			}
+		}
+	}
+	this.InsertIntoSoundStreamData = function(soundInstance, startIndex, endIndex, loopValue, offsetValue){ 
+ 		this.soundStreamDuration.set({instance:soundInstance}, {start: startIndex, end:endIndex, loop:loopValue, offset:offsetValue});
+	}
+	this.clearAllSoundStreams = function(){
+		this.soundStreamDuration.forEach(function(value,key){
+			key.instance.stop();
+		});
+ 		this.soundStreamDuration.clear();
+		this.currentSoundStreamInMovieclip = undefined;
+	}
+	this.stopSoundStreams = function(currentFrame){
+		if(this.soundStreamDuration.size > 0){
+			var _this = this;
+			this.soundStreamDuration.forEach(function(value,key,arr){
+				if((value.end) == currentFrame){
+					key.instance.stop();
+					if(_this.currentSoundStreamInMovieclip == key) { _this.currentSoundStreamInMovieclip = undefined; }
+					arr.delete(key);
+				}
+			});
+		}
+	}
+
+	this.computeCurrentSoundStreamInstance = function(currentFrame){
+		if(this.currentSoundStreamInMovieclip == undefined){
+			var _this = this;
+			if(this.soundStreamDuration.size > 0){
+				var maxDuration = 0;
+				this.soundStreamDuration.forEach(function(value,key){
+					if(value.end > maxDuration){
+						maxDuration = value.end;
+						_this.currentSoundStreamInMovieclip = key;
+					}
+				});
+			}
+		}
+	}
+	this.getDesiredFrame = function(currentFrame, calculatedDesiredFrame){
+		for(var frameIndex in this.actionFrames){
+			if((frameIndex > currentFrame) && (frameIndex < calculatedDesiredFrame)){
+				return frameIndex;
+			}
+		}
+		return calculatedDesiredFrame;
+	}
+
+	this.syncStreamSounds = function(){
+		this.stopSoundStreams(this.currentFrame);
+		this.computeCurrentSoundStreamInstance(this.currentFrame);
+		if(this.currentSoundStreamInMovieclip != undefined){
+			var soundInstance = this.currentSoundStreamInMovieclip.instance;
+			if(soundInstance.position != 0){
+				var soundValue = this.soundStreamDuration.get(this.currentSoundStreamInMovieclip);
+				var soundPosition = (soundValue.offset?(soundInstance.position - soundValue.offset): soundInstance.position);
+				var calculatedDesiredFrame = (soundValue.start)+((soundPosition/1000) * lib.properties.fps);
+				if(soundValue.loop > 1){
+					calculatedDesiredFrame +=(((((soundValue.loop - soundInstance.loop -1)*soundInstance.duration)) / 1000) * lib.properties.fps);
+				}
+				calculatedDesiredFrame = Math.floor(calculatedDesiredFrame);
+				var deltaFrame = calculatedDesiredFrame - this.currentFrame;
+				if((deltaFrame >= 0) && this.ignorePause){
+					cjs.MovieClip.prototype.play.call(this);
+					this.ignorePause = false;
+				}
+				else if(deltaFrame >= 2){
+					this.gotoAndPlayForStreamSoundSync(this.getDesiredFrame(this.currentFrame,calculatedDesiredFrame));
+				}
+				else if(deltaFrame <= -2){
+					cjs.MovieClip.prototype.stop.call(this);
+					this.ignorePause = true;
+				}
+			}
+		}
 	}
 }).prototype = p = new cjs.MovieClip();
 // symbols:
@@ -563,23 +677,6 @@ if (reversed == null) { reversed = false; }
 	this._renderFirstFrame();
 
 }).prototype = getMCSymbolPrototype(lib.Symbol1, new cjs.Rectangle(0,0,165.9,98.2), null);
-
-
-(lib.sound = function(mode,startPosition,loop,reversed) {
-if (loop == null) { loop = true; }
-if (reversed == null) { reversed = false; }
-	var props = new Object();
-	props.mode = mode;
-	props.startPosition = startPosition;
-	props.labels = {};
-	props.loop = loop;
-	props.reversed = reversed;
-	cjs.MovieClip.apply(this,[props]);
-
-	this._renderFirstFrame();
-
-}).prototype = p = new cjs.MovieClip();
-p.nominalBounds = new cjs.Rectangle(0,0,0,0);
 
 
 (lib.Scene_1_Windows_Backup = function(mode,startPosition,loop,reversed) {
@@ -1612,28 +1709,6 @@ if (reversed == null) { reversed = false; }
 p.nominalBounds = new cjs.Rectangle(-641,-361,1282,722);
 
 
-(lib.Scene_1_sound = function(mode,startPosition,loop,reversed) {
-if (loop == null) { loop = true; }
-if (reversed == null) { reversed = false; }
-	var props = new Object();
-	props.mode = mode;
-	props.startPosition = startPosition;
-	props.labels = {};
-	props.loop = loop;
-	props.reversed = reversed;
-	cjs.MovieClip.apply(this,[props]);
-
-	// sound
-	this.instance = new lib.sound();
-	this.instance.setTransform(640,360,1,1,0,0,0,640,360);
-
-	this.timeline.addTween(cjs.Tween.get(this.instance).wait(120));
-
-	this._renderFirstFrame();
-
-}).prototype = p = new cjs.MovieClip();
-
-
 (lib.Scene_1_Shooting_Star = function(mode,startPosition,loop,reversed) {
 if (loop == null) { loop = true; }
 if (reversed == null) { reversed = false; }
@@ -1794,7 +1869,9 @@ if (reversed == null) { reversed = false; }
 	props.reversed = reversed;
 	cjs.MovieClip.apply(this,[props]);
 
-	this.actionFrames = [0,119];
+	this.actionFrames = [0,11,119];
+	this.streamSoundSymbolsList[0] = [{id:"WanderEmmitFenn",startFrame:0,endFrame:119,loop:1,offset:0},{id:"WindChimeswav",startFrame:0,endFrame:119,loop:1,offset:0}];
+	this.streamSoundSymbolsList[11] = [{id:"ShootingStarwav",startFrame:11,endFrame:32,loop:1,offset:0}];
 	this.___GetDepth___ = function(obj) {
 		var depth = obj.depth;
 		var cameraObj = this.___camera___instance;
@@ -1826,6 +1903,12 @@ if (reversed == null) { reversed = false; }
 
 	// timeline functions:
 	this.frame_0 = function() {
+		this.clearAllSoundStreams();
+		 
+		var soundInstance = playSound("WindChimeswav",0);
+		this.InsertIntoSoundStreamData(soundInstance,0,119,1);
+		var soundInstance = playSound("WanderEmmitFenn",0);
+		this.InsertIntoSoundStreamData(soundInstance,0,119,1);
 		this.button_2 = this.Buttons.button_2;
 		this.button_1 = this.Buttons.button_1;
 		this.button_3 = this.Buttons.button_3;
@@ -1880,12 +1963,16 @@ if (reversed == null) { reversed = false; }
 		*/
 		_this.stop();
 	}
+	this.frame_11 = function() {
+		var soundInstance = playSound("ShootingStarwav",0);
+		this.InsertIntoSoundStreamData(soundInstance,11,32,1);
+	}
 	this.frame_119 = function() {
 		this.___loopingOver___ = true;
 	}
 
 	// actions tween:
-	this.timeline.addTween(cjs.Tween.get(this).call(this.frame_0).wait(119).call(this.frame_119).wait(1));
+	this.timeline.addTween(cjs.Tween.get(this).call(this.frame_0).wait(11).call(this.frame_11).wait(108).call(this.frame_119).wait(1));
 
 	// Camera
 	this.___camera___instance = new lib.___Camera___();
@@ -1909,19 +1996,6 @@ if (reversed == null) { reversed = false; }
 
 	this.timeline.addTween(cjs.Tween.get(this.Buttons).wait(120));
 
-	// sound_obj_
-	this.sound = new lib.Scene_1_sound();
-	this.sound.name = "sound";
-	this.sound.setTransform(320,180,1,1,0,0,0,320,180);
-	this.sound.depth = 0;
-	this.sound.isAttachedToCamera = 0
-	this.sound.isAttachedToMask = 0
-	this.sound.layerDepth = 0
-	this.sound.layerIndex = 1
-	this.sound.maskLayerName = 0
-
-	this.timeline.addTween(cjs.Tween.get(this.sound).wait(120));
-
 	// Palm_Trees_obj_
 	this.Palm_Trees = new lib.Scene_1_Palm_Trees();
 	this.Palm_Trees.name = "Palm_Trees";
@@ -1930,7 +2004,7 @@ if (reversed == null) { reversed = false; }
 	this.Palm_Trees.isAttachedToCamera = 0
 	this.Palm_Trees.isAttachedToMask = 0
 	this.Palm_Trees.layerDepth = 0
-	this.Palm_Trees.layerIndex = 2
+	this.Palm_Trees.layerIndex = 1
 	this.Palm_Trees.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Palm_Trees).wait(119).to({regX:666.1,regY:578.8,scaleX:1.157,scaleY:1.157,x:670.2,y:613.2},0).wait(1));
@@ -1943,7 +2017,7 @@ if (reversed == null) { reversed = false; }
 	this.Water_reflection.isAttachedToCamera = 0
 	this.Water_reflection.isAttachedToMask = 0
 	this.Water_reflection.layerDepth = 0
-	this.Water_reflection.layerIndex = 3
+	this.Water_reflection.layerIndex = 2
 	this.Water_reflection.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Water_reflection).wait(26).to({regX:623.3,regY:645.3,scaleX:1.157,scaleY:1.157,x:620.65},0).wait(94));
@@ -1956,7 +2030,7 @@ if (reversed == null) { reversed = false; }
 	this.Water.isAttachedToCamera = 0
 	this.Water.isAttachedToMask = 0
 	this.Water.layerDepth = 0
-	this.Water.layerIndex = 4
+	this.Water.layerIndex = 3
 	this.Water.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Water).wait(119).to({regX:745.4,regY:679.5,scaleX:1.157,scaleY:1.157,x:761.95,y:729.7},0).wait(1));
@@ -1969,7 +2043,7 @@ if (reversed == null) { reversed = false; }
 	this.Buildings_Front.isAttachedToCamera = 0
 	this.Buildings_Front.isAttachedToMask = 0
 	this.Buildings_Front.layerDepth = 0
-	this.Buildings_Front.layerIndex = 5
+	this.Buildings_Front.layerIndex = 4
 	this.Buildings_Front.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Buildings_Front).wait(119).to({regX:677.3,regY:578,scaleX:1.157,scaleY:1.157,x:683.15,y:612.25},0).wait(1));
@@ -1982,7 +2056,7 @@ if (reversed == null) { reversed = false; }
 	this.Windows_Backup.isAttachedToCamera = 0
 	this.Windows_Backup.isAttachedToMask = 0
 	this.Windows_Backup.layerDepth = 0
-	this.Windows_Backup.layerIndex = 6
+	this.Windows_Backup.layerIndex = 5
 	this.Windows_Backup.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Windows_Backup).to({_off:true},1).wait(119));
@@ -1995,7 +2069,7 @@ if (reversed == null) { reversed = false; }
 	this.Windows.isAttachedToCamera = 0
 	this.Windows.isAttachedToMask = 0
 	this.Windows.layerDepth = 0
-	this.Windows.layerIndex = 7
+	this.Windows.layerIndex = 6
 	this.Windows.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Windows).wait(26).to({regX:682,regY:448.6,scaleX:1.157,scaleY:1.157,y:462.55},0).wait(94));
@@ -2008,7 +2082,7 @@ if (reversed == null) { reversed = false; }
 	this.Buildings_Middle.isAttachedToCamera = 0
 	this.Buildings_Middle.isAttachedToMask = 0
 	this.Buildings_Middle.layerDepth = 0
-	this.Buildings_Middle.layerIndex = 8
+	this.Buildings_Middle.layerIndex = 7
 	this.Buildings_Middle.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Buildings_Middle).wait(64).to({regX:638.8,regY:482.2,scaleX:1.157,scaleY:1.157},0).wait(56));
@@ -2021,7 +2095,7 @@ if (reversed == null) { reversed = false; }
 	this.Buildings_Back.isAttachedToCamera = 0
 	this.Buildings_Back.isAttachedToMask = 0
 	this.Buildings_Back.layerDepth = 0
-	this.Buildings_Back.layerIndex = 9
+	this.Buildings_Back.layerIndex = 8
 	this.Buildings_Back.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Buildings_Back).wait(64).to({regX:638.4,regY:485.9,scaleX:1.157,scaleY:1.157,x:638.15},0).wait(56));
@@ -2034,7 +2108,7 @@ if (reversed == null) { reversed = false; }
 	this.Sun_Inner.isAttachedToCamera = 0
 	this.Sun_Inner.isAttachedToMask = 0
 	this.Sun_Inner.layerDepth = 0
-	this.Sun_Inner.layerIndex = 10
+	this.Sun_Inner.layerIndex = 9
 	this.Sun_Inner.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Sun_Inner).wait(24).to({regX:644.6,regY:182.2,scaleX:1.157,scaleY:1.157},0).wait(96));
@@ -2047,7 +2121,7 @@ if (reversed == null) { reversed = false; }
 	this.Sun_Middle.isAttachedToCamera = 0
 	this.Sun_Middle.isAttachedToMask = 0
 	this.Sun_Middle.layerDepth = 0
-	this.Sun_Middle.layerIndex = 11
+	this.Sun_Middle.layerIndex = 10
 	this.Sun_Middle.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Sun_Middle).wait(24).to({regX:645.6,regY:182.4,scaleX:1.157,scaleY:1.157,x:646.45,y:154.55},0).wait(96));
@@ -2060,7 +2134,7 @@ if (reversed == null) { reversed = false; }
 	this.Sun_Outer.isAttachedToCamera = 0
 	this.Sun_Outer.isAttachedToMask = 0
 	this.Sun_Outer.layerDepth = 0
-	this.Sun_Outer.layerIndex = 12
+	this.Sun_Outer.layerIndex = 11
 	this.Sun_Outer.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Sun_Outer).wait(24).to({regX:644.4,regY:183,scaleX:1.157,scaleY:1.157,y:155.25},0).wait(96));
@@ -2073,7 +2147,7 @@ if (reversed == null) { reversed = false; }
 	this.Shooting_Star.isAttachedToCamera = 0
 	this.Shooting_Star.isAttachedToMask = 0
 	this.Shooting_Star.layerDepth = 0
-	this.Shooting_Star.layerIndex = 13
+	this.Shooting_Star.layerIndex = 12
 	this.Shooting_Star.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.Shooting_Star).wait(1).to({regX:788.3,regY:148.5,x:788.3,y:148.5},0).wait(119));
@@ -2212,7 +2286,7 @@ if (reversed == null) { reversed = false; }
 	this.Mask.isAttachedToCamera = 0
 	this.Mask.isAttachedToMask = 0
 	this.Mask.layerDepth = 0
-	this.Mask.layerIndex = 14
+	this.Mask.layerIndex = 13
 	this.Mask.maskLayerName = 0
 
 	var maskedShapeInstanceList = [this.Mask];
@@ -2231,7 +2305,7 @@ if (reversed == null) { reversed = false; }
 	this.BG.isAttachedToCamera = 0
 	this.BG.isAttachedToMask = 0
 	this.BG.layerDepth = 0
-	this.BG.layerIndex = 15
+	this.BG.layerIndex = 14
 	this.BG.maskLayerName = 0
 
 	this.timeline.addTween(cjs.Tween.get(this.BG).wait(24).to({regY:360.9,scaleX:1.157,scaleY:1.157,y:361.05},0).wait(96));
